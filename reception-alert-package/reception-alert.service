@@ -1,0 +1,19 @@
+[Unit]
+Description=Reception alert button for Nextcloud Talk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_GROUP__
+SupplementaryGroups=gpio
+WorkingDirectory=__APP_DIR__
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+ExecStart=/usr/bin/python3 __APP_DIR__/app.py __APP_DIR__/config.toml
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

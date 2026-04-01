@@ -1,0 +1,45 @@
+# Nextcloud Talk 接続設定
+nextcloud_base_url = "https://example.com"
+nextcloud_username = "alertbot"
+nextcloud_app_password = "APP_PASSWORD_HERE"
+talk_room_token = "ROOM_TOKEN_HERE"
+
+# 通知表示
+location_name = "案内カウンターA"
+
+# HTTPS 通信
+request_timeout_seconds = 5
+verify_tls = true
+# 独自 CA を使う場合だけ指定。不要なら空文字のまま。
+ca_bundle_path = ""
+
+# GPIO 割り当て
+alive_led_gpio = 5
+send_led_gpio = 27
+
+# ボタン入力の挙動
+cooldown_seconds = 3
+bounce_seconds = 0.08
+retry_delays_seconds = [0, 1, 3]
+
+# LED 表示時間
+success_hold_seconds = 30
+failure_blink_seconds = 30
+
+[[buttons]]
+name = "staff"
+gpio = 17
+prefix = "【受付通知】"
+message = "人手をお願いします"
+
+[[buttons]]
+name = "urgent"
+gpio = 22
+prefix = "【受付至急】"
+message = "すぐ来てください"
+
+[[buttons]]
+name = "emergency"
+gpio = 23
+prefix = "【受付緊急】"
+message = "至急応援をお願いします"
