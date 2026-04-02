@@ -206,7 +206,7 @@ class AlertServiceTests(unittest.TestCase):
             self.assertTrue(service.handle_button_press("staff"))
             time.sleep(0.1)
             service.shutdown()
-            self.assertTrue(service._leds_closed)
+            self.assertTrue(service.send_led_controller.is_closed)
             self.assertTrue(service._worker_thread.is_alive())
         finally:
             service._stop_event.set()

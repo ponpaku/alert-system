@@ -12,6 +12,7 @@ from config import AppConfig, ButtonConfig, ConfigError
 from dispatcher import Dispatcher
 from message_constants import TEST_PREFIX
 from models import AlertEvent, DispatchSummary, build_alert_event, summarize_dispatch_results
+from send_led_controller import SendLedController
 
 try:
     from gpiozero import Button as GpioButton
@@ -53,20 +54,14 @@ class AlertService:
         self._stop_event = threading.Event()
         self._queue: queue.Queue[QueuedAlert] = queue.Queue(maxsize=config.delivery.queue_capacity)
         self._worker_thread = threading.Thread(target=self._worker_loop, name="alert-worker", daemon=True)
-        self._send_led_timer: threading.Timer | None = None
-        self._send_led_timer_lock = threading.Lock()
-        self._failure_blink_thread: threading.Thread | None = None
-        self._failure_blink_stop = threading.Event()
-        self._failure_blink_lock = threading.Lock()
         self._accept_lock = threading.Lock()
-        self._led_lock = threading.Lock()
         self._shutdown_deadline_lock = threading.Lock()
         self._last_accepted_monotonic = 0.0
         self._shutdown_deadline_monotonic: float | None = None
-        self._leds_closed = False
         led_factory = GpioLED if self.use_gpio else NoopLED
         self.alive_led = led_factory(config.gpio.alive_led_gpio)
         self.send_led = led_factory(config.gpio.send_led_gpio)
+        self.send_led_controller = SendLedController(self.send_led, stop_event=self._stop_event)
         self.buttons = []
         if self.use_gpio:
             for button in config.buttons:
@@ -124,17 +119,13 @@ class AlertService:
         with self._shutdown_deadline_lock:
             if self._shutdown_deadline_monotonic is None:
                 self._shutdown_deadline_monotonic = time.monotonic() + self.config.delivery.shutdown_grace_seconds
-        self._cancel_send_led_timer()
-        self._cancel_failure_blink()
         self._worker_thread.join(timeout=self._shutdown_join_timeout_seconds())
         worker_alive = self._worker_thread.is_alive()
         for button in self.buttons:
             button.close()
-        with self._led_lock:
-            self._leds_closed = True
-            if not worker_alive:
-                self.send_led.close()
-                self.alive_led.close()
+        self.send_led_controller.shutdown(close_led=not worker_alive)
+        if not worker_alive:
+            self.alive_led.close()
         if worker_alive:
             logging.warning("Worker did not stop within shutdown grace; skipped LED close to avoid post-close GPIO access")
         logging.info("Shutdown complete")
@@ -160,10 +151,7 @@ class AlertService:
                 self._queue.task_done()
                 self._drain_queue_without_processing()
                 return
-            self._cancel_send_led_timer()
-            blink_stop = threading.Event()
-            blink_thread = threading.Thread(target=self._blink_send_led_until, args=(blink_stop, 0.15, 0.15), daemon=True)
-            blink_thread.start()
+            self.send_led_controller.start_activity_blink()
             try:
                 results = self.dispatcher.dispatch(
                     queued_alert.event,
@@ -172,8 +160,7 @@ class AlertService:
                     deadline_supplier=self._get_shutdown_deadline,
                 )
             finally:
-                blink_stop.set()
-                blink_thread.join(timeout=1.0)
+                self.send_led_controller.stop_activity_blink()
                 self._queue.task_done()
             summary = summarize_dispatch_results(results)
             logging.info(
@@ -196,79 +183,9 @@ class AlertService:
 
     def _apply_led_summary(self, summary: DispatchSummary) -> None:
         if summary == "success":
-            self._cancel_failure_blink()
-            self._set_send_led_success_hold(self.config.timing.success_hold_seconds)
+            self.send_led_controller.show_success_hold(self.config.timing.success_hold_seconds)
             return
-        self._start_failure_blink(self.config.timing.failure_blink_seconds)
-
-    def _cancel_send_led_timer(self) -> None:
-        with self._send_led_timer_lock:
-            if self._send_led_timer is not None:
-                self._send_led_timer.cancel()
-                self._send_led_timer = None
-
-    def _cancel_failure_blink(self) -> None:
-        with self._failure_blink_lock:
-            self._failure_blink_stop.set()
-            thread = self._failure_blink_thread
-            self._failure_blink_thread = None
-        if thread is not None:
-            thread.join(timeout=1.0)
-        self._failure_blink_stop = threading.Event()
-
-    def _start_failure_blink(self, seconds: float) -> None:
-        self._cancel_send_led_timer()
-        self._cancel_failure_blink()
-        if seconds <= 0:
-            self._safe_send_led_off()
-            return
-        stop_event = self._failure_blink_stop
-        thread = threading.Thread(target=self._blink_failure_until, args=(stop_event, seconds), daemon=True)
-        with self._failure_blink_lock:
-            self._failure_blink_thread = thread
-        thread.start()
-
-    def _safe_send_led_on(self) -> None:
-        with self._led_lock:
-            if self._leds_closed:
-                return
-            self.send_led.on()
-
-    def _safe_send_led_off(self) -> None:
-        with self._led_lock:
-            if self._leds_closed:
-                return
-            self.send_led.off()
-
-    def _set_send_led_success_hold(self, seconds: float) -> None:
-        self._cancel_send_led_timer()
-        self._safe_send_led_on()
-        timer = threading.Timer(seconds, self._safe_send_led_off)
-        timer.daemon = True
-        with self._send_led_timer_lock:
-            self._send_led_timer = timer
-        timer.start()
-
-    def _blink_send_led_until(self, stop_event: threading.Event, on_sec: float, off_sec: float) -> None:
-        while not stop_event.is_set() and not self._stop_event.is_set():
-            self._safe_send_led_on()
-            if stop_event.wait(on_sec) or self._stop_event.is_set():
-                break
-            self._safe_send_led_off()
-            if stop_event.wait(off_sec) or self._stop_event.is_set():
-                break
-        self._safe_send_led_off()
-
-    def _blink_failure_until(self, stop_event: threading.Event, seconds: float) -> None:
-        end_at = time.monotonic() + seconds
-        while time.monotonic() < end_at and not self._stop_event.is_set() and not stop_event.is_set():
-            self._safe_send_led_on()
-            if stop_event.wait(0.5) or self._stop_event.wait(0.0):
-                break
-            self._safe_send_led_off()
-            if stop_event.wait(0.5) or self._stop_event.wait(0.0):
-                break
-        self._safe_send_led_off()
+        self.send_led_controller.show_failure_blink(self.config.timing.failure_blink_seconds)
 
     def _drain_queue_without_processing(self) -> None:
         while True:
