@@ -23,6 +23,22 @@ fi
 
 mkdir -p "$APP_DIR"
 install -m 0755 "$SOURCE_DIR/app.py" "$APP_DIR/app.py"
+install -m 0644 "$SOURCE_DIR/alert_service.py" "$APP_DIR/alert_service.py"
+install -m 0644 "$SOURCE_DIR/config.py" "$APP_DIR/config.py"
+install -m 0644 "$SOURCE_DIR/dispatcher.py" "$APP_DIR/dispatcher.py"
+install -m 0644 "$SOURCE_DIR/message_constants.py" "$APP_DIR/message_constants.py"
+install -m 0644 "$SOURCE_DIR/models.py" "$APP_DIR/models.py"
+install -m 0644 "$SOURCE_DIR/transport.py" "$APP_DIR/transport.py"
+mkdir -p "$APP_DIR/destinations"
+install -m 0644 "$SOURCE_DIR/destinations/__init__.py" "$APP_DIR/destinations/__init__.py"
+install -m 0644 "$SOURCE_DIR/destinations/base.py" "$APP_DIR/destinations/base.py"
+install -m 0644 "$SOURCE_DIR/destinations/common.py" "$APP_DIR/destinations/common.py"
+install -m 0644 "$SOURCE_DIR/destinations/discord_webhook.py" "$APP_DIR/destinations/discord_webhook.py"
+install -m 0644 "$SOURCE_DIR/destinations/generic_webhook.py" "$APP_DIR/destinations/generic_webhook.py"
+install -m 0644 "$SOURCE_DIR/destinations/line_bot.py" "$APP_DIR/destinations/line_bot.py"
+install -m 0644 "$SOURCE_DIR/destinations/nextcloud_bot.py" "$APP_DIR/destinations/nextcloud_bot.py"
+install -m 0644 "$SOURCE_DIR/destinations/nextcloud_talk.py" "$APP_DIR/destinations/nextcloud_talk.py"
+install -m 0644 "$SOURCE_DIR/destinations/slack_webhook.py" "$APP_DIR/destinations/slack_webhook.py"
 
 if [[ -f "$SOURCE_DIR/config.toml" ]]; then
   install -m 0600 "$SOURCE_DIR/config.toml" "$APP_DIR/config.toml"

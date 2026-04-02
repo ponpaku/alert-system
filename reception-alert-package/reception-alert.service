@@ -1,5 +1,5 @@
 [Unit]
-Description=Reception alert button for Nextcloud Talk
+Description=Reception alert button multi-destination dispatcher
 After=network-online.target
 Wants=network-online.target
 
