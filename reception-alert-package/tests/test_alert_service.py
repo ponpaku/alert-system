@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from alert_service import AlertService
 from config import ConfigError, parse_config
+from dispatcher import Dispatcher
 from message_constants import TEST_PREFIX
 from models import AlertEvent, DispatchResult
 
@@ -17,16 +20,48 @@ class BlockingDispatcher:
         self.calls: list[tuple[AlertEvent, tuple[str, ...] | None]] = []
         self.started = threading.Event()
         self.release = threading.Event()
+        self.closed = False
 
-    def dispatch(self, event, target_names=None, *, stop_event=None, deadline_monotonic=None, deadline_supplier=None):
+    def resolve_target_names(self, target_names=None):
+        return list(target_names or ["talk-main", "hook-main"])
+
+    def close(self) -> None:
+        self.closed = True
+
+    def dispatch(
+        self,
+        event,
+        target_names=None,
+        *,
+        stop_event=None,
+        deadline_monotonic=None,
+        deadline_supplier=None,
+        result_handler=None,
+    ):
         self.calls.append((event, tuple(target_names) if target_names is not None else None))
         self.started.set()
         self.release.wait(1.0)
-        return [DispatchResult.success("talk-main", 201)]
+        results = [DispatchResult.success("talk-main", 201)]
+        if result_handler is not None:
+            for result in results:
+                result_handler(result)
+        return results
 
 
 class NeverFinishingDispatcher:
-    def dispatch(self, event, target_names=None, *, stop_event=None, deadline_monotonic=None, deadline_supplier=None):
+    def resolve_target_names(self, target_names=None):
+        return list(target_names or ["talk-main", "hook-main"])
+
+    def dispatch(
+        self,
+        event,
+        target_names=None,
+        *,
+        stop_event=None,
+        deadline_monotonic=None,
+        deadline_supplier=None,
+        result_handler=None,
+    ):
         while True:
             time.sleep(0.05)
 
@@ -36,10 +71,130 @@ class FailingDispatcher:
         self.call_times: list[float] = []
         self.started = threading.Event()
 
-    def dispatch(self, event, target_names=None, *, stop_event=None, deadline_monotonic=None, deadline_supplier=None):
+    def resolve_target_names(self, target_names=None):
+        return list(target_names or ["talk-main", "hook-main"])
+
+    def dispatch(
+        self,
+        event,
+        target_names=None,
+        *,
+        stop_event=None,
+        deadline_monotonic=None,
+        deadline_supplier=None,
+        result_handler=None,
+    ):
         self.call_times.append(time.monotonic())
         self.started.set()
-        return [DispatchResult.failed("talk-main", status_code=500, retryable=False, error_summary="boom")]
+        results = [DispatchResult.failed("talk-main", status_code=500, retryable=False, error_summary="boom")]
+        if result_handler is not None:
+            for result in results:
+                result_handler(result)
+        return results
+
+
+class CrashingDispatcher:
+    def __init__(self):
+        self.started = threading.Event()
+
+    def resolve_target_names(self, target_names=None):
+        return list(target_names or ["talk-main", "hook-main"])
+
+    def dispatch(
+        self,
+        event,
+        target_names=None,
+        *,
+        stop_event=None,
+        deadline_monotonic=None,
+        deadline_supplier=None,
+        result_handler=None,
+    ):
+        self.started.set()
+        raise RuntimeError("boom")
+
+
+class NonRetryableDispatcher:
+    def __init__(self):
+        self.started = threading.Event()
+
+    def resolve_target_names(self, target_names=None):
+        return list(target_names or ["talk-main", "hook-main"])
+
+    def dispatch(
+        self,
+        event,
+        target_names=None,
+        *,
+        stop_event=None,
+        deadline_monotonic=None,
+        deadline_supplier=None,
+        result_handler=None,
+    ):
+        self.started.set()
+        results = [
+            DispatchResult.failed("talk-main", status_code=400, retryable=False, error_summary="bad request"),
+            DispatchResult.not_attempted("hook-main", error_summary="unknown destination"),
+        ]
+        if result_handler is not None:
+            for result in results:
+                result_handler(result)
+        return results
+
+    def close(self) -> None:
+        pass
+
+
+class LegacyDispatcher:
+    def __init__(self):
+        self.started = threading.Event()
+        self.calls: list[tuple[AlertEvent, tuple[str, ...] | None]] = []
+
+    def resolve_target_names(self, target_names=None):
+        return list(target_names or ["talk-main"])
+
+    def dispatch(self, event, target_names=None, *, stop_event=None, deadline_monotonic=None, deadline_supplier=None):
+        self.calls.append((event, tuple(target_names) if target_names is not None else None))
+        self.started.set()
+        return [DispatchResult.success("talk-main", 201)]
+
+    def close(self) -> None:
+        pass
+
+
+class ExplodingDestination:
+    def __init__(self, name: str):
+        self.name = name
+        self.enabled = True
+        self.calls = 0
+
+    def send(self, event, *, stop_event=None, deadline_monotonic=None):
+        self.calls += 1
+        raise RuntimeError("boom")
+
+
+class SlowSuccessDestination:
+    def __init__(self, name: str, *, sleep_seconds: float):
+        self.name = name
+        self.enabled = True
+        self.calls = 0
+        self.sleep_seconds = sleep_seconds
+
+    def send(self, event, *, stop_event=None, deadline_monotonic=None):
+        self.calls += 1
+        time.sleep(self.sleep_seconds)
+        return DispatchResult.success(self.name, 200)
+
+
+class SlowIgnoringStopDestination(SlowSuccessDestination):
+    def __init__(self, name: str, results: list[DispatchResult], *, sleep_seconds: float):
+        super().__init__(name, sleep_seconds=sleep_seconds)
+        self._results = list(results)
+
+    def send(self, event, *, stop_event=None, deadline_monotonic=None):
+        self.calls += 1
+        time.sleep(self.sleep_seconds)
+        return self._results[min(self.calls - 1, len(self._results) - 1)]
 
 
 class FakeThread:
@@ -51,6 +206,33 @@ class FakeThread:
 
     def is_alive(self) -> bool:
         return False
+
+
+class RecordingLed:
+    instances: list["RecordingLed"] = []
+
+    def __init__(self, *args, **kwargs):
+        self.closed = False
+        self.on_calls = 0
+        self.off_calls = 0
+        RecordingLed.instances.append(self)
+
+    def on(self) -> None:
+        self.on_calls += 1
+
+    def off(self) -> None:
+        self.off_calls += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TrackingQueueStore:
+    def __init__(self):
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class AlertServiceTests(unittest.TestCase):
@@ -162,6 +344,8 @@ class AlertServiceTests(unittest.TestCase):
         raw = make_raw_config()
         raw["timing"]["cooldown_seconds"] = 0
         raw["timing"]["failure_blink_seconds"] = 2
+        raw["delivery"]["persistent_retry_base_seconds"] = 10
+        raw["delivery"]["persistent_retry_max_seconds"] = 10
         config = parse_config(raw)
         dispatcher = FailingDispatcher()
         service = AlertService(config, dispatcher, use_gpio=False)
@@ -181,6 +365,125 @@ class AlertServiceTests(unittest.TestCase):
         config = parse_config(make_raw_config())
         with self.assertRaises(ConfigError):
             AlertService(config, BlockingDispatcher(), use_gpio=True)
+
+    def test_worker_crash_sets_fatal_error_and_rejects_new_presses(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        config = parse_config(raw)
+        dispatcher = CrashingDispatcher()
+        service = AlertService(config, dispatcher, use_gpio=False)
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            dispatcher.started.wait(1.0)
+            deadline = time.monotonic() + 1.0
+            while service._worker_thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(service._worker_thread.is_alive())
+            self.assertIsNotNone(service._get_fatal_error())
+            self.assertFalse(service.handle_button_press("staff"))
+        finally:
+            service.shutdown()
+
+    def test_non_retryable_results_are_not_requeued(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        config = parse_config(raw)
+        dispatcher = NonRetryableDispatcher()
+        service = AlertService(config, dispatcher, use_gpio=False)
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            dispatcher.started.wait(1.0)
+            deadline = time.monotonic() + 1.0
+            while service._queue_store.pending_count() != 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(service._queue_store.pending_count(), 0)
+        finally:
+            service.shutdown()
+
+    def test_test_mode_does_not_require_persistent_queue(self) -> None:
+        raw = make_raw_config()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw["delivery"]["persistent_queue_path"] = tmpdir
+            config = parse_config(raw)
+            service = AlertService(config, BlockingDispatcher(), use_gpio=False, enable_queue_worker=False)
+            try:
+                self.assertFalse(service.enable_queue_worker)
+                self.assertIsNone(service._queue_store)
+            finally:
+                service.shutdown()
+
+    def test_legacy_dispatcher_is_rejected_in_persistent_queue_mode(self) -> None:
+        raw = make_raw_config()
+        config = parse_config(raw)
+        dispatcher = LegacyDispatcher()
+        with self.assertRaises(ConfigError):
+            AlertService(config, dispatcher, use_gpio=False)
+
+    def test_legacy_dispatcher_can_still_be_used_without_queue_worker(self) -> None:
+        config = parse_config(make_raw_config())
+        dispatcher = LegacyDispatcher()
+        service = AlertService(config, dispatcher, use_gpio=False, enable_queue_worker=False)
+        try:
+            summary = service.dispatch_test_button("staff")
+            self.assertEqual(summary, "success")
+            self.assertEqual(len(dispatcher.calls), 1)
+        finally:
+            service.shutdown()
+
+    def test_parallel_destination_exception_keeps_success_progress_and_worker_alive(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        raw["delivery"]["persistent_retry_base_seconds"] = 10
+        raw["delivery"]["persistent_retry_max_seconds"] = 10
+        config = parse_config(raw)
+        dispatcher = Dispatcher(
+            [
+                ExplodingDestination("talk-main"),
+                SlowSuccessDestination("hook-main", sleep_seconds=0.05),
+            ],
+            retry_delays_seconds=(0,),
+            max_parallel_destinations=2,
+        )
+        service = AlertService(config, dispatcher, use_gpio=False)
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            deadline = time.monotonic() + 2.0
+            while service._queue_store.pending_count() != 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(service._queue_store.pending_count(), 0)
+            self.assertTrue(service._worker_thread.is_alive())
+            self.assertIsNone(service._get_fatal_error())
+        finally:
+            service.shutdown()
+
+    def test_inflight_destination_completion_within_cutoff_grace_drains_queue_without_fatal(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        raw["delivery"]["max_event_delivery_seconds"] = 0.02
+        raw["delivery"]["running_cutoff_grace_seconds"] = 0.2
+        raw["delivery"]["persistent_retry_base_seconds"] = 10
+        raw["delivery"]["persistent_retry_max_seconds"] = 10
+        config = parse_config(raw)
+        dispatcher = Dispatcher(
+            [
+                SlowSuccessDestination("talk-main", sleep_seconds=0.08),
+                SlowSuccessDestination("hook-main", sleep_seconds=0.01),
+            ],
+            retry_delays_seconds=(0,),
+            max_parallel_destinations=2,
+            running_cutoff_grace_seconds=config.delivery.running_cutoff_grace_seconds,
+        )
+        service = AlertService(config, dispatcher, use_gpio=False)
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            deadline = time.monotonic() + 2.0
+            while service._queue_store.pending_count() != 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(service._queue_store.pending_count(), 0)
+            self.assertTrue(service._worker_thread.is_alive())
+            self.assertIsNone(service._get_fatal_error())
+        finally:
+            service.shutdown()
 
     def test_shutdown_wait_uses_request_timeout_when_longer_than_grace(self) -> None:
         raw = make_raw_config()
@@ -210,3 +513,135 @@ class AlertServiceTests(unittest.TestCase):
             self.assertTrue(service._worker_thread.is_alive())
         finally:
             service._stop_event.set()
+
+    def test_abandoned_inflight_completion_persists_progress_after_shutdown(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        raw["delivery"]["max_event_delivery_seconds"] = 0.02
+        raw["delivery"]["running_cutoff_grace_seconds"] = 0.01
+        raw["delivery"]["persistent_retry_base_seconds"] = 10
+        raw["delivery"]["persistent_retry_max_seconds"] = 10
+        config = parse_config(raw)
+        dispatcher = Dispatcher(
+            [
+                SlowSuccessDestination("talk-main", sleep_seconds=0.12),
+                SlowSuccessDestination("hook-main", sleep_seconds=0.01),
+            ],
+            retry_delays_seconds=(0,),
+            max_parallel_destinations=2,
+            running_cutoff_grace_seconds=config.delivery.running_cutoff_grace_seconds,
+        )
+        service = AlertService(config, dispatcher, use_gpio=False)
+        queue_store = service._queue_store
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            fatal_deadline = time.monotonic() + 1.0
+            while service._get_fatal_error() is None and time.monotonic() < fatal_deadline:
+                time.sleep(0.01)
+            self.assertIsNotNone(service._get_fatal_error())
+            service.shutdown()
+            pending_deadline = time.monotonic() + 1.0
+            while queue_store is not None and not queue_store._closed and queue_store.pending_count() != 0 and time.monotonic() < pending_deadline:
+                time.sleep(0.02)
+            self.assertIsNotNone(queue_store)
+            self.assertTrue(queue_store._closed or queue_store.pending_count() == 0)
+        finally:
+            if service._queue_store is not None:
+                service._queue_store.close()
+
+    def test_shutdown_eventually_closes_queue_store_after_detached_completion(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        raw["delivery"]["max_event_delivery_seconds"] = 0.02
+        raw["delivery"]["running_cutoff_grace_seconds"] = 0.01
+        config = parse_config(raw)
+        dispatcher = Dispatcher(
+            [
+                SlowSuccessDestination("talk-main", sleep_seconds=0.12),
+                SlowSuccessDestination("hook-main", sleep_seconds=0.01),
+            ],
+            retry_delays_seconds=(0,),
+            max_parallel_destinations=2,
+            running_cutoff_grace_seconds=config.delivery.running_cutoff_grace_seconds,
+            detached_cleanup_timeout_seconds=0.5,
+        )
+        service = AlertService(config, dispatcher, use_gpio=False)
+        queue_store = service._queue_store
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            fatal_deadline = time.monotonic() + 1.0
+            while service._get_fatal_error() is None and time.monotonic() < fatal_deadline:
+                time.sleep(0.01)
+            self.assertIsNotNone(service._get_fatal_error())
+            service.shutdown()
+            close_deadline = time.monotonic() + 1.0
+            while service._queue_store is not None and time.monotonic() < close_deadline:
+                time.sleep(0.02)
+            self.assertIsNone(service._queue_store)
+            self.assertIsNotNone(queue_store)
+            self.assertTrue(queue_store._closed)
+        finally:
+            if service._queue_store is not None:
+                service._queue_store.close()
+
+    def test_shutdown_closes_queue_store_after_detached_cleanup_timeout(self) -> None:
+        raw = make_raw_config()
+        raw["timing"]["cooldown_seconds"] = 0
+        raw["delivery"]["max_event_delivery_seconds"] = 0.02
+        raw["delivery"]["running_cutoff_grace_seconds"] = 0.01
+        config = parse_config(raw)
+        dispatcher = Dispatcher(
+            [
+                SlowIgnoringStopDestination("talk-main", [DispatchResult.success("talk-main", 200)], sleep_seconds=1.0),
+                SlowSuccessDestination("hook-main", sleep_seconds=0.01),
+            ],
+            retry_delays_seconds=(0,),
+            max_parallel_destinations=2,
+            running_cutoff_grace_seconds=config.delivery.running_cutoff_grace_seconds,
+            detached_cleanup_timeout_seconds=0.05,
+        )
+        service = AlertService(config, dispatcher, use_gpio=False)
+        queue_store = service._queue_store
+        try:
+            self.assertTrue(service.handle_button_press("staff"))
+            fatal_deadline = time.monotonic() + 1.0
+            while service._get_fatal_error() is None and time.monotonic() < fatal_deadline:
+                time.sleep(0.01)
+            self.assertIsNotNone(service._get_fatal_error())
+            service.shutdown()
+            close_deadline = time.monotonic() + 0.5
+            while service._queue_store is not None and time.monotonic() < close_deadline:
+                time.sleep(0.02)
+            self.assertIsNone(service._queue_store)
+            self.assertIsNotNone(queue_store)
+            self.assertTrue(queue_store._closed)
+        finally:
+            if service._queue_store is not None:
+                service._queue_store.close()
+
+    def test_startup_failure_closes_allocated_leds(self) -> None:
+        RecordingLed.instances.clear()
+        config = parse_config(make_raw_config())
+
+        with patch("alert_service.GpioLED", RecordingLed), patch("alert_service.GpioButton", RecordingLed), patch(
+            "alert_service.SendLedController", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                AlertService(config, BlockingDispatcher(), use_gpio=True, enable_queue_worker=False)
+
+        self.assertGreaterEqual(len(RecordingLed.instances), 2)
+        self.assertTrue(all(led.closed for led in RecordingLed.instances[:2]))
+
+    def test_startup_failure_closes_queue_store_and_dispatcher_in_worker_mode(self) -> None:
+        config = parse_config(make_raw_config())
+        dispatcher = BlockingDispatcher()
+        fake_queue = TrackingQueueStore()
+
+        with patch("alert_service.PersistentQueue", return_value=fake_queue), patch(
+            "alert_service.SendLedController", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                AlertService(config, dispatcher, use_gpio=False, enable_queue_worker=True)
+
+        self.assertTrue(fake_queue.closed)
+        self.assertTrue(dispatcher.closed)

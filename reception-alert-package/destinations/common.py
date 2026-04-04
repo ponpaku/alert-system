@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -39,6 +41,8 @@ def failure_result_from_response(
     error_summary = f"HTTP {response.status_code}"
     if body:
         error_summary = f"{error_summary} {body[:200]}"
+        if response.truncated:
+            error_summary = f"{error_summary} [truncated]"
     retryable = (
         response.status_code == 429
         or 500 <= response.status_code <= 599
@@ -57,9 +61,26 @@ def not_attempted_for_stop(destination_name: str) -> DispatchResult:
     return DispatchResult.not_attempted(destination_name, error_summary="stopped before request start")
 
 
+def not_attempted_for_deadline(destination_name: str) -> DispatchResult:
+    return DispatchResult.not_attempted(destination_name, error_summary="deadline exceeded before request start")
+
+
+def preflight_not_attempted_result(
+    destination_name: str,
+    *,
+    stop_event: threading.Event | None,
+    deadline_monotonic: float | None,
+) -> DispatchResult | None:
+    if stop_event is not None and stop_event.is_set():
+        return not_attempted_for_stop(destination_name)
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        return not_attempted_for_deadline(destination_name)
+    return None
+
+
 def failure_result_from_exception(destination_name: str, exc: Exception) -> DispatchResult:
     if isinstance(exc, DeadlineExceededError):
-        return DispatchResult.not_attempted(destination_name, error_summary="deadline exceeded before request start")
+        return not_attempted_for_deadline(destination_name)
     retryable = isinstance(exc, requests.RequestException)
     logging.warning("Destination %s failed with exception: %s", destination_name, exc)
     return DispatchResult.failed(

@@ -10,7 +10,7 @@ from config import NextcloudBotConfig
 from models import AlertEvent, DispatchResult
 from transport import HttpTransport
 
-from .common import event_text, failure_result_from_exception, failure_result_from_response, not_attempted_for_stop
+from .common import event_text, failure_result_from_exception, failure_result_from_response, preflight_not_attempted_result
 
 
 class NextcloudBotDestination:
@@ -27,8 +27,13 @@ class NextcloudBotDestination:
         stop_event: threading.Event | None = None,
         deadline_monotonic: float | None = None,
     ) -> DispatchResult:
-        if stop_event is not None and stop_event.is_set():
-            return not_attempted_for_stop(self.name)
+        preflight_result = preflight_not_attempted_result(
+            self.name,
+            stop_event=stop_event,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if preflight_result is not None:
+            return preflight_result
         payload = {"message": event_text(event), "silent": self._config.silent}
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         random_value = secrets.token_hex(32)

@@ -6,7 +6,7 @@ from config import NextcloudTalkConfig
 from models import AlertEvent, DispatchResult
 from transport import HttpTransport
 
-from .common import event_text, failure_result_from_exception, failure_result_from_response, not_attempted_for_stop
+from .common import event_text, failure_result_from_exception, failure_result_from_response, preflight_not_attempted_result
 
 
 class NextcloudTalkDestination:
@@ -23,8 +23,13 @@ class NextcloudTalkDestination:
         stop_event: threading.Event | None = None,
         deadline_monotonic: float | None = None,
     ) -> DispatchResult:
-        if stop_event is not None and stop_event.is_set():
-            return not_attempted_for_stop(self.name)
+        preflight_result = preflight_not_attempted_result(
+            self.name,
+            stop_event=stop_event,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if preflight_result is not None:
+            return preflight_result
         url = f"{self._config.base_url.rstrip('/')}/ocs/v2.php/apps/spreed/api/v1/chat/{self._config.room_token}"
         try:
             response = self._transport.request(

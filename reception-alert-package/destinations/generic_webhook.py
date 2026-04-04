@@ -7,7 +7,7 @@ from config import GenericWebhookAuthConfig, GenericWebhookConfig
 from models import AlertEvent, DispatchResult
 from transport import HttpTransport
 
-from .common import failure_result_from_exception, failure_result_from_response, not_attempted_for_stop
+from .common import failure_result_from_exception, failure_result_from_response, preflight_not_attempted_result
 
 
 class GenericWebhookDestination:
@@ -24,8 +24,13 @@ class GenericWebhookDestination:
         stop_event: threading.Event | None = None,
         deadline_monotonic: float | None = None,
     ) -> DispatchResult:
-        if stop_event is not None and stop_event.is_set():
-            return not_attempted_for_stop(self.name)
+        preflight_result = preflight_not_attempted_result(
+            self.name,
+            stop_event=stop_event,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if preflight_result is not None:
+            return preflight_result
         headers = dict(self._config.headers)
         if self._config.content_type == "json":
             headers.setdefault("Content-Type", "application/json")

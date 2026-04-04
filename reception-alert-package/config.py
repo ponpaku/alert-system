@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +26,7 @@ class HttpConfig:
     request_timeout_seconds: float
     verify_tls: bool
     ca_bundle_path: str
+    response_body_limit_bytes: int
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,13 @@ class DeliveryConfig:
     retry_delays_seconds: tuple[float, ...]
     queue_capacity: int
     shutdown_grace_seconds: float
+    max_retry_after_seconds: float
+    max_event_delivery_seconds: float
+    running_cutoff_grace_seconds: float
+    max_parallel_destinations: int
+    persistent_queue_path: str
+    persistent_retry_base_seconds: float
+    persistent_retry_max_seconds: float
 
 
 @dataclass(frozen=True)
@@ -143,7 +151,7 @@ def load_config(path: str) -> AppConfig:
         raise ConfigError(f"Unsupported config format: {config_path.suffix}")
     with open(config_path, "rb") as file_obj:
         raw = tomllib.load(file_obj)
-    return parse_config(raw)
+    return _resolve_paths(parse_config(raw), config_path.parent)
 
 
 def parse_config(raw: dict[str, Any]) -> AppConfig:
@@ -157,6 +165,7 @@ def parse_config(raw: dict[str, Any]) -> AppConfig:
         request_timeout_seconds=_float(http_raw.get("request_timeout_seconds", 5)),
         verify_tls=bool(http_raw.get("verify_tls", True)),
         ca_bundle_path=str(http_raw.get("ca_bundle_path", "")).strip(),
+        response_body_limit_bytes=_int(http_raw.get("response_body_limit_bytes", 4096)),
     )
     gpio = GpioConfig(
         alive_led_gpio=_int(gpio_raw.get("alive_led_gpio", 5)),
@@ -173,6 +182,15 @@ def parse_config(raw: dict[str, Any]) -> AppConfig:
         retry_delays_seconds=retry_delays,
         queue_capacity=_int(delivery_raw.get("queue_capacity", 8)),
         shutdown_grace_seconds=_float(delivery_raw.get("shutdown_grace_seconds", 6)),
+        max_retry_after_seconds=_float(delivery_raw.get("max_retry_after_seconds", 30)),
+        max_event_delivery_seconds=_float(delivery_raw.get("max_event_delivery_seconds", 15)),
+        running_cutoff_grace_seconds=_float(
+            delivery_raw.get("running_cutoff_grace_seconds", max(0.5, http.request_timeout_seconds + 0.5))
+        ),
+        max_parallel_destinations=_int(delivery_raw.get("max_parallel_destinations", 4)),
+        persistent_queue_path=str(delivery_raw.get("persistent_queue_path", "reception-alert-queue.sqlite3")).strip(),
+        persistent_retry_base_seconds=_float(delivery_raw.get("persistent_retry_base_seconds", 15)),
+        persistent_retry_max_seconds=_float(delivery_raw.get("persistent_retry_max_seconds", 300)),
     )
     raw_destinations = raw.get("destinations")
     if not isinstance(raw_destinations, list) or not raw_destinations:
@@ -277,11 +295,24 @@ def _validate_app_config(config: AppConfig) -> None:
     if config.delivery.queue_capacity < 1:
         raise ConfigError("delivery.queue_capacity must be >= 1")
     _validate_positive("http.request_timeout_seconds", config.http.request_timeout_seconds)
+    if config.http.response_body_limit_bytes < 1:
+        raise ConfigError("http.response_body_limit_bytes must be >= 1")
     _validate_non_negative("timing.bounce_seconds", config.timing.bounce_seconds)
     _validate_non_negative("timing.cooldown_seconds", config.timing.cooldown_seconds)
     _validate_non_negative("timing.success_hold_seconds", config.timing.success_hold_seconds)
     _validate_non_negative("timing.failure_blink_seconds", config.timing.failure_blink_seconds)
     _validate_non_negative("delivery.shutdown_grace_seconds", config.delivery.shutdown_grace_seconds)
+    _validate_non_negative("delivery.max_retry_after_seconds", config.delivery.max_retry_after_seconds)
+    _validate_positive("delivery.max_event_delivery_seconds", config.delivery.max_event_delivery_seconds)
+    _validate_non_negative("delivery.running_cutoff_grace_seconds", config.delivery.running_cutoff_grace_seconds)
+    if config.delivery.max_parallel_destinations < 1:
+        raise ConfigError("delivery.max_parallel_destinations must be >= 1")
+    if not config.delivery.persistent_queue_path:
+        raise ConfigError("delivery.persistent_queue_path must be a non-empty string")
+    _validate_non_negative("delivery.persistent_retry_base_seconds", config.delivery.persistent_retry_base_seconds)
+    _validate_non_negative("delivery.persistent_retry_max_seconds", config.delivery.persistent_retry_max_seconds)
+    if config.delivery.persistent_retry_max_seconds < config.delivery.persistent_retry_base_seconds:
+        raise ConfigError("delivery.persistent_retry_max_seconds must be >= delivery.persistent_retry_base_seconds")
     if not config.delivery.retry_delays_seconds:
         raise ConfigError("delivery.retry_delays_seconds must not be empty")
     for index, delay in enumerate(config.delivery.retry_delays_seconds):
@@ -398,3 +429,26 @@ def _int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"invalid int value: {value!r}") from exc
+
+
+def _resolve_paths(config: AppConfig, base_dir: Path) -> AppConfig:
+    ca_bundle_path = config.http.ca_bundle_path
+    queue_path = config.delivery.persistent_queue_path
+    resolved_http = replace(
+        config.http,
+        ca_bundle_path=_resolve_optional_path(base_dir, ca_bundle_path),
+    )
+    resolved_delivery = replace(
+        config.delivery,
+        persistent_queue_path=_resolve_optional_path(base_dir, queue_path),
+    )
+    return replace(config, http=resolved_http, delivery=resolved_delivery)
+
+
+def _resolve_optional_path(base_dir: Path, raw_path: str) -> str:
+    if not raw_path or raw_path == ":memory:":
+        return raw_path
+    path = Path(raw_path)
+    if path.is_absolute():
+        return str(path)
+    return str((base_dir / path).resolve())

@@ -14,6 +14,7 @@ def make_raw_config() -> dict:
             "request_timeout_seconds": 5,
             "verify_tls": True,
             "ca_bundle_path": "",
+            "response_body_limit_bytes": 4096,
         },
         "gpio": {"alive_led_gpio": 5, "send_led_gpio": 27},
         "timing": {
@@ -22,7 +23,18 @@ def make_raw_config() -> dict:
             "success_hold_seconds": 30,
             "failure_blink_seconds": 30,
         },
-        "delivery": {"retry_delays_seconds": [0, 1, 3], "queue_capacity": 8, "shutdown_grace_seconds": 6},
+        "delivery": {
+            "retry_delays_seconds": [0, 1, 3],
+            "queue_capacity": 8,
+            "shutdown_grace_seconds": 6,
+            "max_retry_after_seconds": 30,
+            "max_event_delivery_seconds": 15,
+            "running_cutoff_grace_seconds": 5.5,
+            "max_parallel_destinations": 4,
+            "persistent_queue_path": ":memory:",
+            "persistent_retry_base_seconds": 15,
+            "persistent_retry_max_seconds": 300,
+        },
         "destinations": [
             {
                 "type": "nextcloud_talk",
@@ -110,15 +122,34 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
+    def test_response_body_limit_must_be_positive(self) -> None:
+        raw = make_raw_config()
+        raw["http"]["response_body_limit_bytes"] = 0
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
     def test_retry_delay_must_be_non_negative(self) -> None:
         raw = make_raw_config()
         raw["delivery"]["retry_delays_seconds"] = [0, -1]
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
+    def test_persistent_retry_max_must_not_be_smaller_than_base(self) -> None:
+        raw = make_raw_config()
+        raw["delivery"]["persistent_retry_base_seconds"] = 30
+        raw["delivery"]["persistent_retry_max_seconds"] = 29
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
     def test_failure_blink_seconds_must_be_non_negative(self) -> None:
         raw = make_raw_config()
         raw["timing"]["failure_blink_seconds"] = -1
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
+    def test_running_cutoff_grace_seconds_must_be_non_negative(self) -> None:
+        raw = make_raw_config()
+        raw["delivery"]["running_cutoff_grace_seconds"] = -0.1
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
