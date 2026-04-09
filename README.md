@@ -108,7 +108,10 @@ Exit codes for `--test`:
 The repository includes a simple install script for a Debian-based Raspberry Pi environment.
 
 ```bash
-cd reception-alert-package
+cd /home/user
+git clone https://github.com/ponpaku/alert-system.git
+cd alert-system/reception-alert-package
+chmod +x setup.sh
 sudo ./setup.sh
 ```
 
