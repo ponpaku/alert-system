@@ -61,6 +61,13 @@ Main sections:
 - `destinations`: enabled notification backends
 - `buttons`: GPIO button definitions and per-button routing rules
 
+About `name`:
+
+- each entry in `destinations` needs a unique `name`
+- `buttons[].destinations` does not use destination type or webhook URL; it uses that `name`
+- destination `name` is the routing key that connects buttons to destinations
+- if a button references a `name` that is missing or disabled, startup stops with a configuration error
+
 Each button can target specific destinations with `buttons[].destinations`.
 If that field is omitted, the button fans out to all enabled destinations.
 

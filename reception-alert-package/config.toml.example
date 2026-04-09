@@ -31,6 +31,8 @@ persistent_retry_max_seconds = 300
 
 [[destinations]]
 type = "nextcloud_talk"
+# Unique destination ID referenced from buttons[].destinations.
+# This is the routing key used by buttons.
 name = "talk-main"
 enabled = true
 base_url = "https://cloud.example.com"
@@ -40,6 +42,7 @@ room_token = "ROOM_TOKEN"
 
 [[destinations]]
 type = "nextcloud_bot"
+# Unique destination ID referenced from buttons[].destinations.
 name = "talk-bot-main"
 enabled = false
 base_url = "https://cloud.example.com"
@@ -49,18 +52,21 @@ silent = false
 
 [[destinations]]
 type = "discord_webhook"
+# Unique destination ID referenced from buttons[].destinations.
 name = "discord-ops"
 enabled = true
 webhook_url = "https://discord.com/api/webhooks/..."
 
 [[destinations]]
 type = "slack_webhook"
+# Unique destination ID referenced from buttons[].destinations.
 name = "slack-frontdesk"
 enabled = true
 webhook_url = "https://hooks.slack.com/services/..."
 
 [[destinations]]
 type = "line_bot"
+# Unique destination ID referenced from buttons[].destinations.
 name = "line-main"
 enabled = false
 channel_access_token = "LINE_CHANNEL_ACCESS_TOKEN"
@@ -68,6 +74,7 @@ to = "USER_OR_GROUP_ID"
 
 [[destinations]]
 type = "generic_webhook"
+# Unique destination ID referenced from buttons[].destinations.
 name = "custom-hook"
 enabled = true
 url = "https://hooks.example.com/reception"
@@ -95,6 +102,7 @@ name = "staff"
 gpio = 17
 prefix = "【受付通知】"
 message = "人手をお願いします"
+# Route by destination.name values defined above.
 destinations = ["talk-main", "discord-ops", "custom-hook"]
 
 [[buttons]]
@@ -102,6 +110,7 @@ name = "urgent"
 gpio = 22
 prefix = "【受付至急】"
 message = "すぐ来てください"
+# Route by destination.name values defined above.
 destinations = ["talk-main", "slack-frontdesk"]
 
 [[buttons]]
@@ -109,4 +118,5 @@ name = "emergency"
 gpio = 23
 prefix = "【受付緊急】"
 message = "至急応援をお願いします"
+# Route by destination.name values defined above.
 destinations = ["talk-main", "discord-ops", "slack-frontdesk"]

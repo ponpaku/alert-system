@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import sqlite3
 import tempfile
 import unittest
@@ -249,6 +250,19 @@ class AppTests(unittest.TestCase):
         with patch("app.build_dispatcher", return_value=dispatcher):
             with self.assertRaisesRegex(ConfigError, "result_handler"):
                 app.validate_gpio_runtime(config)
+
+    def test_main_prints_friendly_config_error_instead_of_traceback(self) -> None:
+        stderr = io.StringIO()
+        with patch("app.load_config", side_effect=ConfigError("button 'staff' references unknown destinations: discord-ops")), patch(
+            "sys.argv", ["app.py", "config.toml", "--test", "staff"]
+        ), patch("sys.stderr", stderr):
+            with self.assertRaises(SystemExit) as exc:
+                app.main()
+        self.assertEqual(exc.exception.code, 2)
+        self.assertEqual(
+            stderr.getvalue().strip(),
+            "設定エラー: button 'staff' references unknown destinations: discord-ops",
+        )
 
 
 def make_config_with_queue_path(path: str):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 
 from alert_service import AlertService, _supports_result_handler
 from config import AppConfig, ConfigError, load_config
@@ -115,41 +116,44 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        config = load_config(args.config)
+        if args.list_buttons:
+            list_buttons(config)
+            return
+        if args.validate_runtime:
+            validate_runtime(config)
+            print("Non-GPIO runtime validation passed")
+            return
+        if args.validate_gpio:
+            validate_gpio_runtime(config)
+            print("GPIO runtime validation passed")
+            return
 
-    config = load_config(args.config)
-    if args.list_buttons:
-        list_buttons(config)
-        return
-    if args.validate_runtime:
-        validate_runtime(config)
-        print("Non-GPIO runtime validation passed")
-        return
-    if args.validate_gpio:
-        validate_gpio_runtime(config)
-        print("GPIO runtime validation passed")
-        return
+        dispatcher = build_dispatcher(config)
+        service = AlertService(
+            config,
+            dispatcher,
+            use_gpio=not bool(args.test),
+            enable_queue_worker=not bool(args.test),
+        )
 
-    dispatcher = build_dispatcher(config)
-    service = AlertService(
-        config,
-        dispatcher,
-        use_gpio=not bool(args.test),
-        enable_queue_worker=not bool(args.test),
-    )
+        if args.test:
+            try:
+                summary = service.dispatch_test_button(args.test)
+            finally:
+                service.shutdown()
+            print(f"Test dispatch result: {summary}")
+            if summary == "success":
+                raise SystemExit(0)
+            if summary == "warning":
+                raise SystemExit(2)
+            raise SystemExit(1)
 
-    if args.test:
-        try:
-            summary = service.dispatch_test_button(args.test)
-        finally:
-            service.shutdown()
-        print(f"Test dispatch result: {summary}")
-        if summary == "success":
-            raise SystemExit(0)
-        if summary == "warning":
-            raise SystemExit(2)
-        raise SystemExit(1)
-
-    service.run()
+        service.run()
+    except ConfigError as exc:
+        print(f"設定エラー: {exc}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
