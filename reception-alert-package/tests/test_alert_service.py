@@ -235,6 +235,21 @@ class TrackingQueueStore:
         self.closed = True
 
 
+class RecordingHeartbeatSender:
+    instances: list["RecordingHeartbeatSender"] = []
+
+    def __init__(self, *args, **kwargs):
+        self.started = False
+        self.stopped = False
+        RecordingHeartbeatSender.instances.append(self)
+
+    def start(self) -> None:
+        self.started = True
+
+    def shutdown(self) -> None:
+        self.stopped = True
+
+
 class AlertServiceTests(unittest.TestCase):
     def test_cooldown_is_applied_on_press(self) -> None:
         config = parse_config(make_raw_config())
@@ -409,6 +424,38 @@ class AlertServiceTests(unittest.TestCase):
             try:
                 self.assertFalse(service.enable_queue_worker)
                 self.assertIsNone(service._queue_store)
+            finally:
+                service.shutdown()
+
+    def test_heartbeat_sender_starts_and_stops_when_enabled(self) -> None:
+        RecordingHeartbeatSender.instances.clear()
+        raw = make_raw_config()
+        raw["heartbeat"] = {
+            "enabled": True,
+            "url": "https://script.google.com/macros/s/example/exec",
+        }
+        config = parse_config(raw)
+        with patch("alert_service.HeartbeatSender", RecordingHeartbeatSender):
+            service = AlertService(config, BlockingDispatcher(), use_gpio=False)
+            try:
+                self.assertEqual(len(RecordingHeartbeatSender.instances), 1)
+                self.assertTrue(RecordingHeartbeatSender.instances[0].started)
+            finally:
+                service.shutdown()
+        self.assertTrue(RecordingHeartbeatSender.instances[0].stopped)
+
+    def test_heartbeat_sender_is_skipped_when_explicitly_disabled(self) -> None:
+        RecordingHeartbeatSender.instances.clear()
+        raw = make_raw_config()
+        raw["heartbeat"] = {
+            "enabled": True,
+            "url": "https://script.google.com/macros/s/example/exec",
+        }
+        config = parse_config(raw)
+        with patch("alert_service.HeartbeatSender", RecordingHeartbeatSender):
+            service = AlertService(config, BlockingDispatcher(), use_gpio=False, enable_heartbeat=False)
+            try:
+                self.assertEqual(RecordingHeartbeatSender.instances, [])
             finally:
                 service.shutdown()
 

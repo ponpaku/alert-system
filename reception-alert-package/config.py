@@ -14,6 +14,7 @@ CONFIG_SUFFIXES = {".toml"}
 GENERIC_METHODS = {"POST", "PUT", "PATCH"}
 GENERIC_CONTENT_TYPES = {"json", "form", "text"}
 GENERIC_AUTH_TYPES = {"none", "bearer", "basic", "header"}
+HEARTBEAT_METHODS = {"POST", "PUT", "PATCH"}
 
 
 class ConfigError(ValueError):
@@ -55,6 +56,24 @@ class DeliveryConfig:
     persistent_queue_path: str
     persistent_retry_base_seconds: float
     persistent_retry_max_seconds: float
+
+
+@dataclass(frozen=True)
+class HeartbeatConfig:
+    enabled: bool
+    url: str
+    method: Literal["POST", "PUT", "PATCH"]
+    interval_seconds: float
+    timeout_seconds: float
+    jitter_seconds: float
+    failure_backoff_seconds: float
+    stale_after_seconds: float
+    send_on_startup: bool
+    send_on_shutdown: bool
+    include_queue_depth: bool
+    include_worker_alive: bool
+    shared_secret: str | None
+    instance_id: str | None
 
 
 @dataclass(frozen=True)
@@ -133,6 +152,7 @@ class AppConfig:
     gpio: GpioConfig
     timing: TimingConfig
     delivery: DeliveryConfig
+    heartbeat: HeartbeatConfig
     destinations: tuple[DestinationConfig, ...]
     buttons: tuple[ButtonConfig, ...]
 
@@ -160,6 +180,11 @@ def parse_config(raw: dict[str, Any]) -> AppConfig:
     gpio_raw = _require_dict(raw, "gpio")
     timing_raw = _require_dict(raw, "timing")
     delivery_raw = _require_dict(raw, "delivery")
+    heartbeat_raw = raw.get("heartbeat", {})
+    if heartbeat_raw is None:
+        heartbeat_raw = {}
+    if not isinstance(heartbeat_raw, dict):
+        raise ConfigError("heartbeat must be a table")
     http = HttpConfig(
         user_agent=str(http_raw.get("user_agent", "ReceptionAlert/1.0")),
         request_timeout_seconds=_float(http_raw.get("request_timeout_seconds", 5)),
@@ -192,6 +217,22 @@ def parse_config(raw: dict[str, Any]) -> AppConfig:
         persistent_retry_base_seconds=_float(delivery_raw.get("persistent_retry_base_seconds", 15)),
         persistent_retry_max_seconds=_float(delivery_raw.get("persistent_retry_max_seconds", 300)),
     )
+    heartbeat = HeartbeatConfig(
+        enabled=bool(heartbeat_raw.get("enabled", False)),
+        url=str(heartbeat_raw.get("url", "")).strip(),
+        method=str(heartbeat_raw.get("method", "POST")).upper(),  # type: ignore[arg-type]
+        interval_seconds=_float(heartbeat_raw.get("interval_seconds", 300)),
+        timeout_seconds=_float(heartbeat_raw.get("timeout_seconds", 5)),
+        jitter_seconds=_float(heartbeat_raw.get("jitter_seconds", 15)),
+        failure_backoff_seconds=_float(heartbeat_raw.get("failure_backoff_seconds", 60)),
+        stale_after_seconds=_float(heartbeat_raw.get("stale_after_seconds", 900)),
+        send_on_startup=bool(heartbeat_raw.get("send_on_startup", True)),
+        send_on_shutdown=bool(heartbeat_raw.get("send_on_shutdown", True)),
+        include_queue_depth=bool(heartbeat_raw.get("include_queue_depth", True)),
+        include_worker_alive=bool(heartbeat_raw.get("include_worker_alive", True)),
+        shared_secret=_optional_str(heartbeat_raw.get("shared_secret")),
+        instance_id=_optional_str(heartbeat_raw.get("instance_id")),
+    )
     raw_destinations = raw.get("destinations")
     if not isinstance(raw_destinations, list) or not raw_destinations:
         raise ConfigError("destinations must be a non-empty array")
@@ -200,7 +241,7 @@ def parse_config(raw: dict[str, Any]) -> AppConfig:
     if not isinstance(raw_buttons, list) or not raw_buttons:
         raise ConfigError("buttons must be a non-empty array")
     buttons = tuple(_parse_button(entry) for entry in raw_buttons)
-    config = AppConfig(location_name, http, gpio, timing, delivery, destinations, buttons)
+    config = AppConfig(location_name, http, gpio, timing, delivery, heartbeat, destinations, buttons)
     _validate_app_config(config)
     return config
 
@@ -313,6 +354,17 @@ def _validate_app_config(config: AppConfig) -> None:
     _validate_non_negative("delivery.persistent_retry_max_seconds", config.delivery.persistent_retry_max_seconds)
     if config.delivery.persistent_retry_max_seconds < config.delivery.persistent_retry_base_seconds:
         raise ConfigError("delivery.persistent_retry_max_seconds must be >= delivery.persistent_retry_base_seconds")
+    if config.heartbeat.method not in HEARTBEAT_METHODS:
+        raise ConfigError(f"heartbeat.method must be one of: {', '.join(sorted(HEARTBEAT_METHODS))}")
+    _validate_positive("heartbeat.interval_seconds", config.heartbeat.interval_seconds)
+    _validate_positive("heartbeat.timeout_seconds", config.heartbeat.timeout_seconds)
+    _validate_non_negative("heartbeat.jitter_seconds", config.heartbeat.jitter_seconds)
+    _validate_non_negative("heartbeat.failure_backoff_seconds", config.heartbeat.failure_backoff_seconds)
+    _validate_positive("heartbeat.stale_after_seconds", config.heartbeat.stale_after_seconds)
+    if config.heartbeat.enabled and not config.heartbeat.url:
+        raise ConfigError("heartbeat.url must be set when heartbeat.enabled=true")
+    if config.heartbeat.stale_after_seconds < config.heartbeat.interval_seconds:
+        raise ConfigError("heartbeat.stale_after_seconds must be >= heartbeat.interval_seconds")
     if not config.delivery.retry_delays_seconds:
         raise ConfigError("delivery.retry_delays_seconds must not be empty")
     for index, delay in enumerate(config.delivery.retry_delays_seconds):

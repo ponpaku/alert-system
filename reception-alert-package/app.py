@@ -60,6 +60,7 @@ def validate_runtime(config: AppConfig) -> None:
             dispatcher,
             use_gpio=False,
             enable_queue_worker=False,
+            enable_heartbeat=False,
         )
     finally:
         if service is not None:
@@ -82,6 +83,7 @@ def validate_gpio_runtime(config: AppConfig) -> None:
             dispatcher,
             use_gpio=True,
             enable_queue_worker=False,
+            enable_heartbeat=False,
         )
     finally:
         if service is not None:
@@ -136,6 +138,7 @@ def main() -> None:
             dispatcher,
             use_gpio=not bool(args.test),
             enable_queue_worker=not bool(args.test),
+            enable_heartbeat=not bool(args.test),
         )
 
         if args.test:
