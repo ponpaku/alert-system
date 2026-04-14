@@ -92,6 +92,18 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
+    def test_heartbeat_stale_after_must_cover_interval_and_jitter(self) -> None:
+        raw = make_raw_config()
+        raw["heartbeat"] = {
+            "enabled": True,
+            "url": "https://script.google.com/macros/s/example/exec",
+            "interval_seconds": 300,
+            "jitter_seconds": 60,
+            "stale_after_seconds": 359,
+        }
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
     def test_heartbeat_config_is_parsed(self) -> None:
         raw = make_raw_config()
         raw["heartbeat"] = {

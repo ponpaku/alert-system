@@ -363,8 +363,11 @@ def _validate_app_config(config: AppConfig) -> None:
     _validate_positive("heartbeat.stale_after_seconds", config.heartbeat.stale_after_seconds)
     if config.heartbeat.enabled and not config.heartbeat.url:
         raise ConfigError("heartbeat.url must be set when heartbeat.enabled=true")
-    if config.heartbeat.stale_after_seconds < config.heartbeat.interval_seconds:
-        raise ConfigError("heartbeat.stale_after_seconds must be >= heartbeat.interval_seconds")
+    minimum_stale_after_seconds = config.heartbeat.interval_seconds + config.heartbeat.jitter_seconds
+    if config.heartbeat.stale_after_seconds < minimum_stale_after_seconds:
+        raise ConfigError(
+            "heartbeat.stale_after_seconds must be >= heartbeat.interval_seconds + heartbeat.jitter_seconds"
+        )
     if not config.delivery.retry_delays_seconds:
         raise ConfigError("delivery.retry_delays_seconds must not be empty")
     for index, delay in enumerate(config.delivery.retry_delays_seconds):
