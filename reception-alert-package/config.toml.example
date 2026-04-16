@@ -10,7 +10,7 @@ response_body_limit_bytes = 4096
 [gpio]
 alive_led_gpio = 5
 send_led_gpio = 27
-send_led_brightness = 0.35
+led_brightness = 0.35
 
 [timing]
 bounce_seconds = 0.08

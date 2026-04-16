@@ -73,6 +73,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.location_name, DEFAULT_LOCATION_NAME)
         self.assertEqual(config.buttons[0].destinations, ("talk-main", "hook-main"))
 
+    def test_parse_config_accepts_legacy_send_led_brightness(self) -> None:
+        raw = make_raw_config()
+        raw["gpio"]["send_led_brightness"] = 0.2
+        config = parse_config(raw)
+        self.assertEqual(config.gpio.led_brightness, 0.2)
+
     def test_duplicate_destination_name_fails_fast(self) -> None:
         raw = make_raw_config()
         raw["destinations"].append(dict(raw["destinations"][0]))
@@ -153,15 +159,15 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
-    def test_send_led_brightness_must_be_positive(self) -> None:
+    def test_led_brightness_must_be_positive(self) -> None:
         raw = make_raw_config()
-        raw["gpio"]["send_led_brightness"] = 0
+        raw["gpio"]["led_brightness"] = 0
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
-    def test_send_led_brightness_must_be_at_most_one(self) -> None:
+    def test_led_brightness_must_be_at_most_one(self) -> None:
         raw = make_raw_config()
-        raw["gpio"]["send_led_brightness"] = 1.1
+        raw["gpio"]["led_brightness"] = 1.1
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
