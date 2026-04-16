@@ -89,18 +89,21 @@ class AlertService:
         self.alive_led = None
         self.send_led = None
         self.send_led_controller = None
+        self._alive_led_uses_pwm = False
         try:
             send_led_uses_pwm = False
             if self.use_gpio:
-                self.alive_led = GpioLED(config.gpio.alive_led_gpio)
-                brightness = config.gpio.send_led_brightness
+                brightness = config.gpio.led_brightness
                 if brightness < 1 and GpioPWMLED is not None:
-                    # 送信 LED だけ PWM で減光する。
+                    # alive/send の両 LED を共通輝度で制御する。
+                    self.alive_led = GpioPWMLED(config.gpio.alive_led_gpio, initial_value=0)
                     self.send_led = GpioPWMLED(config.gpio.send_led_gpio, initial_value=0)
+                    self._alive_led_uses_pwm = True
                     send_led_uses_pwm = True
                 else:
                     if brightness < 1:
-                        logging.warning("PWMLED is unavailable; send LED brightness control is disabled")
+                        logging.warning("PWMLED is unavailable; LED brightness control is disabled")
+                    self.alive_led = GpioLED(config.gpio.alive_led_gpio)
                     self.send_led = GpioLED(config.gpio.send_led_gpio)
             else:
                 self.alive_led = NoopLED(config.gpio.alive_led_gpio)
@@ -108,7 +111,7 @@ class AlertService:
             self.send_led_controller = SendLedController(
                 self.send_led,
                 stop_event=self._stop_event,
-                brightness=config.gpio.send_led_brightness,
+                brightness=config.gpio.led_brightness,
                 use_pwm=send_led_uses_pwm,
             )
             if self.use_gpio:
@@ -171,7 +174,7 @@ class AlertService:
         if Device is not None:
             logging.info("Pin factory: %s", Device.pin_factory)
         logging.info("Ready with %d buttons", len(self.buttons))
-        self.alive_led.on()
+        self._turn_alive_led_on()
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
         try:
@@ -220,6 +223,13 @@ class AlertService:
                 self._shutdown_deadline_monotonic = time.monotonic() + self.config.delivery.shutdown_grace_seconds
         self._stop_event.set()
         self._work_available.set()
+
+    def _turn_alive_led_on(self) -> None:
+        # PWM 対応時は共通輝度を直接適用する。
+        if self._alive_led_uses_pwm and self.config.gpio.led_brightness < 1:
+            self.alive_led.value = self.config.gpio.led_brightness
+            return
+        self.alive_led.on()
 
     def _worker_entrypoint(self) -> None:
         try:
