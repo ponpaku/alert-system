@@ -24,6 +24,12 @@ class FakeLed:
         self.actions.append("close")
 
 
+class FakePwmLed(FakeLed):
+    def __init__(self):
+        super().__init__()
+        self.value = 0.0
+
+
 class ShutdownDuringStartThread:
     def __init__(self, controller: SendLedController, target=None, args=(), kwargs=None, **ignored):
         self._controller = controller
@@ -110,3 +116,18 @@ class SendLedControllerTests(unittest.TestCase):
             controller.show_failure_blink(0.2)
         self.assertTrue(controller.is_closed)
         self.assertFalse(led.closed)
+
+    def test_brightness_uses_pwm_value_when_supported(self) -> None:
+        led = FakePwmLed()
+        controller = SendLedController(led, stop_event=threading.Event(), brightness=0.35, use_pwm=True)
+        controller.show_success_hold(0.01)
+        time.sleep(0.03)
+        self.assertEqual(led.value, 0.35)
+        self.assertNotIn("on", led.actions)
+
+    def test_value_attribute_without_pwm_mode_falls_back_to_on(self) -> None:
+        led = FakePwmLed()
+        controller = SendLedController(led, stop_event=threading.Event(), brightness=0.35, use_pwm=False)
+        controller.show_success_hold(0.01)
+        time.sleep(0.03)
+        self.assertIn("on", led.actions)

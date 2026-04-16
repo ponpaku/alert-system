@@ -623,7 +623,9 @@ class AlertServiceTests(unittest.TestCase):
         RecordingLed.instances.clear()
         config = parse_config(make_raw_config())
 
-        with patch("alert_service.GpioLED", RecordingLed), patch("alert_service.GpioButton", RecordingLed), patch(
+        with patch("alert_service.GpioLED", RecordingLed), patch("alert_service.GpioPWMLED", RecordingLed), patch(
+            "alert_service.GpioButton", RecordingLed
+        ), patch(
             "alert_service.SendLedController", side_effect=RuntimeError("boom")
         ):
             with self.assertRaises(RuntimeError):
@@ -645,3 +647,13 @@ class AlertServiceTests(unittest.TestCase):
 
         self.assertTrue(fake_queue.closed)
         self.assertTrue(dispatcher.closed)
+
+    def test_send_led_controller_disables_pwm_when_pwm_led_is_unavailable(self) -> None:
+        config = parse_config(make_raw_config())
+        dispatcher = BlockingDispatcher()
+        with patch("alert_service.GpioLED", RecordingLed), patch("alert_service.GpioButton", RecordingLed), patch(
+            "alert_service.GpioPWMLED", None
+        ), patch("alert_service.SendLedController") as controller_cls:
+            service = AlertService(config, dispatcher, use_gpio=True, enable_queue_worker=False)
+            service.shutdown()
+        self.assertFalse(controller_cls.call_args.kwargs["use_pwm"])

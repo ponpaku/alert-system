@@ -33,6 +33,7 @@ class HttpConfig:
 class GpioConfig:
     alive_led_gpio: int
     send_led_gpio: int
+    send_led_brightness: float
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ def parse_config(raw: dict[str, Any]) -> AppConfig:
     gpio = GpioConfig(
         alive_led_gpio=_int(gpio_raw.get("alive_led_gpio", 5)),
         send_led_gpio=_int(gpio_raw.get("send_led_gpio", 27)),
+        send_led_brightness=_float(gpio_raw.get("send_led_brightness", 0.35)),
     )
     timing = TimingConfig(
         bounce_seconds=_float(timing_raw.get("bounce_seconds", 0.08)),
@@ -298,6 +300,9 @@ def _validate_app_config(config: AppConfig) -> None:
     if config.http.response_body_limit_bytes < 1:
         raise ConfigError("http.response_body_limit_bytes must be >= 1")
     _validate_non_negative("timing.bounce_seconds", config.timing.bounce_seconds)
+    _validate_positive("gpio.send_led_brightness", config.gpio.send_led_brightness)
+    if config.gpio.send_led_brightness > 1:
+        raise ConfigError("gpio.send_led_brightness must be <= 1")
     _validate_non_negative("timing.cooldown_seconds", config.timing.cooldown_seconds)
     _validate_non_negative("timing.success_hold_seconds", config.timing.success_hold_seconds)
     _validate_non_negative("timing.failure_blink_seconds", config.timing.failure_blink_seconds)

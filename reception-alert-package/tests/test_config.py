@@ -153,6 +153,18 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config(raw)
 
+    def test_send_led_brightness_must_be_positive(self) -> None:
+        raw = make_raw_config()
+        raw["gpio"]["send_led_brightness"] = 0
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
+    def test_send_led_brightness_must_be_at_most_one(self) -> None:
+        raw = make_raw_config()
+        raw["gpio"]["send_led_brightness"] = 1.1
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
     def test_generic_webhook_bearer_auth_requires_token(self) -> None:
         raw = make_raw_config()
         raw["destinations"][1]["auth"] = {"type": "bearer"}

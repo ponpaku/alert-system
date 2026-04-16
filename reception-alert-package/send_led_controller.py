@@ -6,9 +6,11 @@ from typing import Any
 
 
 class SendLedController:
-    def __init__(self, led: Any, *, stop_event: threading.Event):
+    def __init__(self, led: Any, *, stop_event: threading.Event, brightness: float = 1.0, use_pwm: bool = False):
         self._led = led
         self._stop_event = stop_event
+        self._brightness = brightness
+        self._use_pwm = use_pwm
         self._lock = threading.Lock()
         self._generation = 0
         self._closed = False
@@ -129,6 +131,9 @@ class SendLedController:
 
     def _safe_led_on_locked(self) -> None:
         if self._closed:
+            return
+        if self._use_pwm and self._brightness < 1:
+            self._led.value = self._brightness
             return
         self._led.on()
 

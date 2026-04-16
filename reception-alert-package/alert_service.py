@@ -19,10 +19,12 @@ try:
     from gpiozero import Button as GpioButton
     from gpiozero import Device
     from gpiozero import LED as GpioLED
+    from gpiozero import PWMLED as GpioPWMLED
 except ModuleNotFoundError:  # pragma: no cover
     GpioButton = None
     Device = None
     GpioLED = None
+    GpioPWMLED = None
 
 
 class NoopLED:
@@ -88,10 +90,27 @@ class AlertService:
         self.send_led = None
         self.send_led_controller = None
         try:
-            led_factory = GpioLED if self.use_gpio else NoopLED
-            self.alive_led = led_factory(config.gpio.alive_led_gpio)
-            self.send_led = led_factory(config.gpio.send_led_gpio)
-            self.send_led_controller = SendLedController(self.send_led, stop_event=self._stop_event)
+            send_led_uses_pwm = False
+            if self.use_gpio:
+                self.alive_led = GpioLED(config.gpio.alive_led_gpio)
+                brightness = config.gpio.send_led_brightness
+                if brightness < 1 and GpioPWMLED is not None:
+                    # 送信 LED だけ PWM で減光する。
+                    self.send_led = GpioPWMLED(config.gpio.send_led_gpio, initial_value=0)
+                    send_led_uses_pwm = True
+                else:
+                    if brightness < 1:
+                        logging.warning("PWMLED is unavailable; send LED brightness control is disabled")
+                    self.send_led = GpioLED(config.gpio.send_led_gpio)
+            else:
+                self.alive_led = NoopLED(config.gpio.alive_led_gpio)
+                self.send_led = NoopLED(config.gpio.send_led_gpio)
+            self.send_led_controller = SendLedController(
+                self.send_led,
+                stop_event=self._stop_event,
+                brightness=config.gpio.send_led_brightness,
+                use_pwm=send_led_uses_pwm,
+            )
             if self.use_gpio:
                 for button in config.buttons:
                     gpio_button = GpioButton(button.gpio, pull_up=True, bounce_time=config.timing.bounce_seconds)
