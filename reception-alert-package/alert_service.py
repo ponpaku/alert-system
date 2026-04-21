@@ -6,10 +6,12 @@ import signal
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from config import AppConfig, ButtonConfig, ConfigError
 from dispatcher import Dispatcher
+from heartbeat import HeartbeatSender, HeartbeatState
 from message_constants import TEST_PREFIX
 from models import AlertEvent, DispatchSummary, build_alert_event, summarize_dispatch_results
 from persistent_queue import PersistedAlert, PersistentQueue, QueueFullError
@@ -55,6 +57,7 @@ class AlertService:
         *,
         use_gpio: bool = True,
         enable_queue_worker: bool = True,
+        enable_heartbeat: bool = True,
     ):
         self.config = config
         self.dispatcher = dispatcher
@@ -65,6 +68,8 @@ class AlertService:
             raise ConfigError("gpiozero support is required for normal service startup")
         self.use_gpio = use_gpio
         self.enable_queue_worker = enable_queue_worker
+        self.enable_heartbeat = enable_heartbeat
+        self._started_at = datetime.now(timezone.utc)
         self._stop_event = threading.Event()
         self._work_available = threading.Event()
         self._fatal_error_lock = threading.Lock()
@@ -72,6 +77,7 @@ class AlertService:
         self._queue_store_close_lock = threading.Lock()
         self._queue_store: PersistentQueue | None = None
         self._worker_thread: threading.Thread | None = None
+        self._heartbeat_sender: HeartbeatSender | None = None
         if self.enable_queue_worker:
             self._queue_store = PersistentQueue(
                 config.delivery.persistent_queue_path,
@@ -121,6 +127,15 @@ class AlertService:
                     self.buttons.append(gpio_button)
             if self._worker_thread is not None:
                 self._worker_thread.start()
+            if self.enable_heartbeat and self.config.heartbeat.enabled:
+                self._heartbeat_sender = HeartbeatSender(
+                    self.config.heartbeat,
+                    self.config.http,
+                    location_name=self.config.location_name,
+                    state_supplier=self._heartbeat_state,
+                    started_at=self._started_at,
+                )
+                self._heartbeat_sender.start()
         except Exception:
             self._cleanup_startup_failure()
             raise
@@ -192,6 +207,10 @@ class AlertService:
             if self._shutdown_deadline_monotonic is None:
                 self._shutdown_deadline_monotonic = time.monotonic() + self.config.delivery.shutdown_grace_seconds
         worker_thread = self._worker_thread
+        heartbeat_sender = self._heartbeat_sender
+        if heartbeat_sender is not None:
+            self._heartbeat_sender = None
+            heartbeat_sender.shutdown()
         if worker_thread is not None:
             worker_thread.join(timeout=self._shutdown_join_timeout_seconds())
         worker_alive = self._worker_is_alive()
@@ -408,6 +427,13 @@ class AlertService:
     def _cleanup_startup_failure(self) -> None:
         self._stop_event.set()
         self._work_available.set()
+        if self._heartbeat_sender is not None:
+            try:
+                heartbeat_sender = self._heartbeat_sender
+                self._heartbeat_sender = None
+                heartbeat_sender.shutdown()
+            except Exception:
+                logging.exception("Failed to shut down heartbeat sender during startup cleanup")
         for button in self.buttons:
             try:
                 button.close()
@@ -439,6 +465,23 @@ class AlertService:
                 dispatcher_close()
             except Exception:
                 logging.exception("Failed to close dispatcher during startup cleanup")
+
+    def _heartbeat_state(self) -> HeartbeatState:
+        return HeartbeatState(
+            queue_depth=self._queue_depth_for_heartbeat(),
+            worker_alive=self._worker_is_alive() if self.enable_queue_worker else None,
+            worker_fatal=self._get_fatal_error() is not None,
+        )
+
+    def _queue_depth_for_heartbeat(self) -> int | None:
+        queue_store = self._queue_store
+        if queue_store is None:
+            return None
+        try:
+            return queue_store.pending_count()
+        except Exception:
+            logging.exception("Failed to inspect queue depth for heartbeat")
+            return None
 
 
 def _supports_result_handler(dispatch_callable: Any) -> bool:

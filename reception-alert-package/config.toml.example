@@ -30,6 +30,22 @@ persistent_queue_path = "reception-alert-queue.sqlite3"
 persistent_retry_base_seconds = 15
 persistent_retry_max_seconds = 300
 
+[heartbeat]
+enabled = false
+url = "https://script.google.com/macros/s/DEPLOYMENT_ID/exec"
+method = "POST"
+interval_seconds = 300
+timeout_seconds = 5
+jitter_seconds = 15
+failure_backoff_seconds = 60
+stale_after_seconds = 900
+send_on_startup = true
+send_on_shutdown = true
+include_queue_depth = true
+include_worker_alive = true
+shared_secret = "OPTIONAL_SHARED_SECRET"
+instance_id = "frontdesk-a"
+
 [[destinations]]
 type = "nextcloud_talk"
 # Unique destination ID referenced from buttons[].destinations.

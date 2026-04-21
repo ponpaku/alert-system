@@ -73,6 +73,7 @@ class AppTests(unittest.TestCase):
         self.assertTrue(service.shutdown_called)
         self.assertEqual(alert_service.call_args.kwargs["use_gpio"], False)
         self.assertEqual(alert_service.call_args.kwargs["enable_queue_worker"], False)
+        self.assertEqual(alert_service.call_args.kwargs["enable_heartbeat"], False)
 
     def test_test_mode_returns_two_for_warning(self) -> None:
         service = FakeService("warning")
@@ -201,6 +202,7 @@ class AppTests(unittest.TestCase):
         open_queue_store.assert_called_once_with(config)
         self.assertEqual(alert_service.call_args.kwargs["use_gpio"], True)
         self.assertEqual(alert_service.call_args.kwargs["enable_queue_worker"], False)
+        self.assertEqual(alert_service.call_args.kwargs["enable_heartbeat"], False)
         self.assertTrue(fake_service.shutdown_called)
         self.assertTrue(fake_queue.closed)
 

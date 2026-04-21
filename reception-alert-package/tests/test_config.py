@@ -72,6 +72,61 @@ class ConfigTests(unittest.TestCase):
         config = parse_config(make_raw_config())
         self.assertEqual(config.location_name, DEFAULT_LOCATION_NAME)
         self.assertEqual(config.buttons[0].destinations, ("talk-main", "hook-main"))
+        self.assertFalse(config.heartbeat.enabled)
+        self.assertEqual(config.heartbeat.interval_seconds, 300)
+
+    def test_heartbeat_enabled_requires_url(self) -> None:
+        raw = make_raw_config()
+        raw["heartbeat"] = {"enabled": True}
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
+    def test_heartbeat_stale_after_must_cover_interval(self) -> None:
+        raw = make_raw_config()
+        raw["heartbeat"] = {
+            "enabled": True,
+            "url": "https://script.google.com/macros/s/example/exec",
+            "interval_seconds": 300,
+            "stale_after_seconds": 299,
+        }
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
+    def test_heartbeat_stale_after_must_cover_interval_and_jitter(self) -> None:
+        raw = make_raw_config()
+        raw["heartbeat"] = {
+            "enabled": True,
+            "url": "https://script.google.com/macros/s/example/exec",
+            "interval_seconds": 300,
+            "jitter_seconds": 60,
+            "stale_after_seconds": 359,
+        }
+        with self.assertRaises(ConfigError):
+            parse_config(raw)
+
+    def test_heartbeat_config_is_parsed(self) -> None:
+        raw = make_raw_config()
+        raw["heartbeat"] = {
+            "enabled": True,
+            "url": "https://script.google.com/macros/s/example/exec",
+            "method": "post",
+            "interval_seconds": 600,
+            "timeout_seconds": 4,
+            "jitter_seconds": 10,
+            "failure_backoff_seconds": 45,
+            "stale_after_seconds": 1800,
+            "send_on_startup": False,
+            "send_on_shutdown": False,
+            "include_queue_depth": False,
+            "include_worker_alive": False,
+            "shared_secret": "secret",
+            "instance_id": "raspi-frontdesk-01",
+        }
+        config = parse_config(raw)
+        self.assertTrue(config.heartbeat.enabled)
+        self.assertEqual(config.heartbeat.method, "POST")
+        self.assertEqual(config.heartbeat.instance_id, "raspi-frontdesk-01")
+        self.assertFalse(config.heartbeat.send_on_startup)
 
     def test_parse_config_accepts_legacy_send_led_brightness(self) -> None:
         raw = make_raw_config()

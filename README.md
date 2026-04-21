@@ -12,6 +12,7 @@ The deployable application lives in `reception-alert-package/`.
 - Persists accepted alerts to a SQLite backed queue before delivery
 - Delivers alerts to multiple destinations in parallel
 - Retries retryable failures and honors `Retry-After` when available
+- Can emit heartbeat webhooks for external uptime monitoring
 - Keeps running cleanly through shutdown and startup recovery
 - Supports operator test commands without enabling GPIO monitoring
 
@@ -58,6 +59,7 @@ Main sections:
 - `gpio`: alive LED and send LED pin numbers
 - `timing`: debounce, cooldown, and LED hold/blink timing
 - `delivery`: retry delays, queue capacity, shutdown grace, parallelism, and persistent queue path
+- `heartbeat`: optional periodic heartbeat webhook settings for external monitors such as Google Apps Script
 - `destinations`: enabled notification backends
 - `buttons`: GPIO button definitions and per-button routing rules
 
@@ -70,6 +72,14 @@ About `name`:
 
 Each button can target specific destinations with `buttons[].destinations`.
 If that field is omitted, the button fans out to all enabled destinations.
+
+Heartbeat notes:
+
+- `heartbeat.enabled = true` turns on startup, periodic, and shutdown heartbeat delivery
+- default interval is `300` seconds with `15` seconds of send jitter
+- the heartbeat payload includes `event`, `status`, `instance_id`, timestamps, and optional `queue_depth` / `worker_alive`
+- `heartbeat.stale_after_seconds` is intended for the remote monitor's missing-heartbeat threshold and defaults to `900`
+- heartbeat failures are logged but do not block alert dispatch
 
 The generic webhook destination supports template placeholders inside payload strings:
 
